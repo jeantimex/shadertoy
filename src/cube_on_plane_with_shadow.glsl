@@ -1,7 +1,7 @@
 /*
- * Sphere on Plane with Soft Shadows
+ * Cube on Plane with Soft Shadows
  * 
- * This shader demonstrates ray marching techniques to render a sphere on a checkerboard plane
+ * This shader demonstrates ray marching techniques to render a cube on a checkerboard plane
  * with physically-based lighting and soft shadows. Key features include:
  * 
  * - Ray marching with signed distance functions (SDFs)
@@ -40,13 +40,16 @@ const bool USE_SOFT_SHADOWS = true;
 const float SHADOW_SOFTNESS = 8.0;
 
 // --- Signed Distance Functions (SDFs) ---
-// SDF for a sphere - returns the signed distance from point p to a sphere
+// SDF for a cube - returns the signed distance from point p to a cube
 // Negative inside, positive outside, zero on the surface
 // p: the point to calculate distance from
-// center: the center position of the sphere
-// r: radius of the sphere
-float sdSphere(vec3 p, vec3 center, float r) {
-  return length(p - center) - r;
+// center: the center position of the cube
+// size: half the length of the cube's sides
+float sdCube(vec3 p, vec3 center, float size) {
+  // Offset p by the center of the cube
+  vec3 q = abs(p - center) - vec3(size);
+  // Distance to the closest point on the cube
+  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
 }
 
 // SDF for an infinite horizontal floor at y = -1
@@ -74,11 +77,11 @@ vec2 opU(vec2 d1, vec2 d2) {
 vec2 map(vec3 p) {
   vec2 res = vec2(1e10, 0.); // Initialize with a very large distance and ID = 0
   vec2 flooring = vec2(sdFloor(p), 0.5); // Floor with ID = 0.5
-  vec2 sphere = vec2(sdSphere(p, vec3(0, 0, 0), 1.), 1.5); // Centered sphere with ID = 1.5
+  vec2 cube = vec2(sdCube(p, vec3(0, 0, 0), 1.0), 1.5); // Centered cube with ID = 1.5
 
   // Combine objects using union operation
   res = opU(res, flooring);
-  res = opU(res, sphere);
+  res = opU(res, cube);
   return res; // the y-component is the ID of the object hit by the ray
 }
 
@@ -112,7 +115,7 @@ vec2 rayMarch(vec3 ro, vec3 rd) {
 // Calculates the surface normal at point p using the gradient of the SDF
 // This uses central differences to approximate the gradient
 // p: the point to calculate normal at
-// center: the center of the sphere (parameter kept for consistency)
+// center: the center of the cube (parameter kept for consistency)
 vec3 calcNormal(in vec3 p, in vec3 center) {
   const float eps = 0.0005; // Small epsilon for offset sampling
   const vec2 h = vec2(eps, 0.0);
@@ -188,8 +191,8 @@ vec3 render(vec3 ro, vec3 rd) {
   float id = res.y; // Material ID of hit object
   vec3 p = ro + rd * d; // Intersection point in 3D space
   
-  // Get the center for normal calculation (only matters for spheres)
-  vec3 center = vec3(0, 0, 0); // Sphere center
+  // Get the center for normal calculation (only matters for cubes)
+  vec3 center = vec3(0, 0, 0); // Cube center
   vec3 normal = calcNormal(p, center); // Surface normal at intersection
   
   // --- Lighting Calculation ---
@@ -211,7 +214,7 @@ vec3 render(vec3 ro, vec3 rd) {
   // Using inverse square law: intensity ∝ 1/distance²
   float lightAttenuation = 1.0 / (1.0 + 0.1 * lightDistance + 0.01 * lightDistance * lightDistance);
   
-  // Base ambient lighting (different for floor and sphere)
+  // Base ambient lighting (different for floor and cube)
   float ambient = 0.1;
   
   // Diffuse lighting (Lambert)
@@ -244,9 +247,9 @@ vec3 render(vec3 ro, vec3 rd) {
     materialColor = vec3(0.95) * (0.3 + 0.7 * mod(floor(p.x) + floor(p.z), 2.0));
     materialShininess = 0.08; // Slightly increased specular for floor
   } else {
-    // Sphere with more saturated red color
-    materialColor = vec3(1.0, 0.15, 0.15);
-    materialShininess = 0.6; // Higher specular for sphere
+    // Cube with blue color
+    materialColor = vec3(0.2, 0.4, 0.8);
+    materialShininess = 0.6; // Higher specular for cube
   }
   
   // Combine lighting components

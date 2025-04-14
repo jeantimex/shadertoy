@@ -1,8 +1,15 @@
 /*
- * Cube on Checkerboard Shader with Camera Rotation
+ * Cube on Checkerboard Shader with Camera Rotation and Soft Shadows
  * 
- * This shader renders a cube on a checkerboard pattern using ray marching.
- * It demonstrates a minimal implementation without complex lighting or shadows.
+ * This shader renders a cube on a checkerboard pattern using ray marching,
+ * with physically-based lighting and soft shadows. It demonstrates:
+ * 
+ * - Ray marching with signed distance functions (SDFs)
+ * - Toggleable soft/hard shadows with configurable softness
+ * - Physically-based lighting with proper light attenuation
+ * - Blinn-Phong specular reflections
+ * - Rotating light source that circles the scene
+ * - ACES-inspired tone mapping for improved contrast
  * 
  * Controls:
  * - Click and drag horizontally to rotate the camera around the scene
@@ -17,7 +24,8 @@
  * 7. In the Image tab, set iChannel0 to Buffer A
  * 
  * Note: ShaderToy uniforms like iResolution are only available in the shader tabs,
- * not in the Common tab. That's why we keep mouse_dragging in the Buffer A tab.
+ * not in the Common tab. That's why we keep mouse_dragging in the Buffer A tab
+ * and pass the light position through a special pixel.
  */
 
 // -------------------------------------------------------
@@ -29,7 +37,7 @@ const float PRADIUS = 0.01; // Small radius for special pixels
 
 // --- Ray Marching Constants ---
 // Maximum number of steps to take when ray marching before giving up
-const int MAX_MARCHING_STEPS = 100;
+const int MAX_MARCHING_STEPS = 255;
 // Minimum distance to start ray marching from
 const float MIN_DIST = 0.0;
 // Maximum distance to consider when ray marching (beyond this is considered a miss)
@@ -42,6 +50,13 @@ const vec3 COLOR_BACKGROUND = vec3(0.835, 1, 1);
 const vec3 COLOR_DARK = vec3(0.1);
 const vec3 COLOR_LIGHT = vec3(0.9);
 const vec3 COLOR_CUBE = vec3(0.2, 0.4, 0.8); // Blue cube
+
+// --- Shadow Settings ---
+// Set to true for soft shadows, false for hard shadows
+const bool USE_SOFT_SHADOWS = true;
+// Controls the softness of shadows when USE_SOFT_SHADOWS is true
+// Higher values = sharper shadows, lower values = softer shadows
+const float SHADOW_SOFTNESS = 8.0;
 
 // --- Signed Distance Functions (SDFs) ---
 // SDF for an infinite horizontal floor at y = -1
@@ -69,35 +84,41 @@ float opUnion(float d1, float d2) {
   return min(d1, d2);
 }
 
+// Union operation for combining two objects with material IDs
+// Takes two vec2 values where:
+//   x component = signed distance
+//   y component = material ID
+// Returns the object with the smallest distance (closest to the ray)
+vec2 opU(vec2 d1, vec2 d2) {
+  return (d1.x < d2.x) ? d1 : d2;
+}
+
 // --- Scene Description ---
 // Maps a 3D point to the closest object in the scene
 // Returns a vec2 where:
 //   x component = signed distance to closest object
-//   y component = material ID (0 = floor, 1 = cube)
+//   y component = material ID (0.5 = floor, 1.5 = cube)
 vec2 map(vec3 p) {
-  // Floor with ID = 0
-  float floorDist = sdFloor(p);
-  vec2 floor = vec2(floorDist, 0.0);
+  vec2 res = vec2(1e10, 0.); // Initialize with a very large distance and ID = 0
+  vec2 flooring = vec2(sdFloor(p), 0.5); // Floor with ID = 0.5
+  vec2 cube = vec2(sdCube(p, vec3(0.0, 0.0, 0.0), 1.0), 1.5); // Cube with ID = 1.5
   
-  // Cube with ID = 1
-  float cubeDist = sdCube(p, vec3(0.0, 0.0, 0.0), 1.0);
-  vec2 cube = vec2(cubeDist, 1.0);
-  
-  // Return the closest object
-  return (floor.x < cube.x) ? floor : cube;
+  // Combine objects using union operation
+  res = opU(res, flooring);
+  res = opU(res, cube);
+  return res;
 }
 
 // --- Ray Marching Implementation ---
 // Marches a ray through the scene to find intersections
 // ro: ray origin (camera position)
 // rd: ray direction
-// Returns a vec3 where:
+// Returns a vec2 where:
 //   x component = distance traveled along ray until hit
 //   y component = material ID of hit object
-//   z component = 0 (unused)
-vec3 rayMarch(vec3 ro, vec3 rd) {
+vec2 rayMarch(vec3 ro, vec3 rd) {
   float depth = MIN_DIST;
-  float materialID = -1.0;
+  vec2 res = vec2(0.0);
   
   // Main ray marching loop
   for(int i = 0; i < MAX_MARCHING_STEPS; i++) {
@@ -107,7 +128,7 @@ vec3 rayMarch(vec3 ro, vec3 rd) {
     
     // If we're very close to the surface, consider it a hit
     if(dist < PRECISION) {
-      materialID = result.y;
+      res = vec2(depth, result.y);
       break;
     }
     
@@ -116,11 +137,12 @@ vec3 rayMarch(vec3 ro, vec3 rd) {
     
     // If we've gone too far, consider it a miss
     if(depth > MAX_DIST) {
+      res = vec2(MAX_DIST, -1.0);
       break;
     }
   }
   
-  return vec3(depth, materialID, 0.0);
+  return res;
 }
 
 // Calculate surface normal at point p
@@ -135,18 +157,65 @@ vec3 calcNormal(vec3 p) {
   );
 }
 
+// --- Shadow Calculation ---
+// Calculates hard shadows (0 or 1)
+// ro: ray origin (the point on the surface)
+// rd: ray direction (direction to the light)
+float hardShadow(vec3 ro, vec3 rd, float mint, float maxt) {
+  for(float t = mint; t < maxt;) {
+    vec3 p = ro + rd * t;
+    float h = map(p).x;
+    
+    if(h < PRECISION) {
+      return 0.0; // In shadow
+    }
+    
+    t += h;
+  }
+  return 1.0; // Not in shadow
+}
+
+// --- Soft Shadow Calculation ---
+// Calculates soft shadows with penumbra
+// ro: ray origin (the point on the surface)
+// rd: ray direction (direction to the light)
+// k: controls the softness of the shadow (higher = sharper shadow edges)
+float softShadow(vec3 ro, vec3 rd, float mint, float maxt, float k) {
+  float res = 1.0; // Start with full light
+  
+  for(float t = mint; t < maxt;) {
+    vec3 p = ro + rd * t;
+    float h = map(p).x;
+    
+    // If we hit something, we're completely in shadow
+    if(h < PRECISION) {
+      return 0.0; // Complete shadow
+    }
+    
+    // This is the key part of soft shadows:
+    // The closer the ray gets to an object, the darker the shadow
+    // k controls how quickly the shadow value drops off with angle
+    res = min(res, k * h / t);
+    
+    t += h;
+  }
+  
+  return res;
+}
+
 // --- Rendering Function ---
-// Calculates the color for a ray based on intersection
+// Calculates the color for a ray based on intersection and lighting
 // ro: ray origin (camera position)
 // rd: ray direction
-vec3 render(vec3 ro, vec3 rd) {
+// lightPosition: position of the light source
+vec3 render(vec3 ro, vec3 rd, vec3 lightPosition) {
   // Default to background color
   vec3 col = COLOR_BACKGROUND;
   
   // Perform ray marching to find intersection
-  vec3 result = rayMarch(ro, rd);
-  float depth = result.x;
-  float materialID = result.y;
+  vec2 res = rayMarch(ro, rd);
+  float depth = res.x;
+  float id = res.y;
   
   // If we hit something (didn't reach MAX_DIST)
   if(depth < MAX_DIST) {
@@ -156,22 +225,83 @@ vec3 render(vec3 ro, vec3 rd) {
     // Calculate surface normal at intersection point
     vec3 normal = calcNormal(p);
     
-    // Simple lighting
-    vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
-    float diffuse = max(dot(normal, lightDir), 0.2); // Add some ambient
+    // --- Lighting Calculation ---
+    vec3 lightDirection = normalize(lightPosition - p);
     
-    // Determine color based on material ID
-    if(materialID < 0.5) {
-      // Floor with checkerboard pattern
-      if(mod(floor(p.x) + floor(p.z), 2.0) < 1.0) {
-        col = COLOR_DARK * diffuse;
-      } else {
-        col = COLOR_LIGHT * diffuse;
-      }
+    // Calculate distance to light for attenuation
+    float lightDistance = length(lightPosition - p);
+    
+    // Light attenuation (falloff with distance)
+    // Using inverse square law: intensity ∝ 1/distance²
+    float lightAttenuation = 1.0 / (1.0 + 0.1 * lightDistance + 0.01 * lightDistance * lightDistance);
+    
+    // Base ambient lighting (different for floor and cube)
+    float ambient = 0.1;
+    
+    // Diffuse lighting (Lambert)
+    float diffuse = max(dot(normal, lightDirection), 0.0);
+    
+    // Specular lighting (Blinn-Phong)
+    vec3 viewDirection = normalize(ro - p);
+    vec3 halfwayDirection = normalize(lightDirection + viewDirection);
+    float specularPower = (id < 1.0) ? 32.0 : 16.0; // Higher for floor (more shiny)
+    float specular = pow(max(dot(normal, halfwayDirection), 0.0), specularPower);
+    
+    // Shadow calculation
+    // Offset the origin slightly to avoid self-shadowing
+    vec3 shadowRayOrigin = p + normal * 0.01;
+    
+    // Calculate shadow (1.0 = fully lit, 0.0 = fully in shadow)
+    float shadow;
+    if (USE_SOFT_SHADOWS) {
+      shadow = softShadow(shadowRayOrigin, lightDirection, 0.1, 10.0, SHADOW_SOFTNESS);
     } else {
-      // Cube
-      col = COLOR_CUBE * diffuse;
+      shadow = hardShadow(shadowRayOrigin, lightDirection, 0.1, 10.0);
     }
+    
+    // Material properties
+    vec3 materialColor;
+    float materialShininess;
+    
+    if(id < 1.0) {
+      // Floor with checkerboard pattern - increased contrast
+      if(mod(floor(p.x) + floor(p.z), 2.0) < 1.0) {
+        materialColor = COLOR_DARK;
+      } else {
+        materialColor = COLOR_LIGHT;
+      }
+      materialShininess = 0.08; // Slightly increased specular for floor
+    } else {
+      // Cube with blue color
+      materialColor = COLOR_CUBE;
+      materialShininess = 0.6; // Higher specular for cube
+    }
+    
+    // Combine lighting components
+    vec3 ambientComponent = ambient * materialColor;
+    vec3 diffuseComponent = diffuse * materialColor * lightAttenuation * shadow;
+    vec3 specularComponent = specular * vec3(1.0) * materialShininess * lightAttenuation * shadow;
+    
+    // Final color
+    col = ambientComponent + diffuseComponent + specularComponent;
+    
+    // Add a subtle environmental lighting
+    col += COLOR_BACKGROUND * 0.02; // Reduced environmental contribution
+    
+    // Apply contrast enhancement
+    col = pow(col, vec3(1.1)); // Increase contrast by applying a power function
+    
+    // Apply improved tone mapping (ACES-inspired)
+    // This gives better contrast than the simple Reinhard operator
+    const float tm_a = 2.51;
+    const float tm_b = 0.03;
+    const float tm_c = 2.43;
+    const float tm_d = 0.59;
+    const float tm_e = 0.14;
+    col = (col * (tm_a * col + tm_b)) / (col * (tm_c * col + tm_d) + tm_e);
+    
+    // Gamma correction with slightly lower gamma for more contrast
+    col = pow(col, vec3(1.0/2.1)); // Standard is 2.2, using 2.1 for slightly higher contrast
   }
   
   return col;
@@ -231,6 +361,26 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     return;
   }
   
+  // Special pixel to store light position
+  if (length(uv - vec2(0.0, 1.0)) < PRADIUS) {
+    // Calculate rotating light position
+    float lightAngle = iTime * 0.5; // Light rotates around the scene
+    float lightRadius = 3.0; // Distance from origin
+    float lightHeight = 3.0; // Height above the plane
+    
+    // Normalize to 0-1 range for storage
+    vec3 lightPosition = vec3(
+      lightRadius * cos(lightAngle), // X position rotates with time
+      lightHeight,                   // Fixed height
+      lightRadius * sin(lightAngle)  // Z position rotates with time
+    );
+    
+    // Store light position (normalized to 0-1 range)
+    fragColor = vec4((lightPosition + vec3(lightRadius, lightHeight, lightRadius)) / 
+                     (2.0 * vec3(lightRadius, lightHeight, lightRadius)), 1.0);
+    return;
+  }
+  
   // For all other pixels, render the scene normally
   // Convert pixel coordinates to normalized device coordinates (-1 to 1)
   // Centered at origin and adjusted for aspect ratio
@@ -240,6 +390,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   vec2 du = vec2(1.0, 1.0) / iResolution.xy;
   vec4 rot = 2.0 * texture(iChannel0, vec2(1.0, 1.0) - du) - 1.0;
   float rotationAngle = rot.x;
+  
+  // Get light position from special pixel
+  vec4 lightData = texture(iChannel0, vec2(0.0, 1.0) - du);
+  
+  // Convert light position back from 0-1 range to world space
+  float lightRadius = 3.0;
+  float lightHeight = 3.0;
+  vec3 lightPosition = lightData.xyz * (2.0 * vec3(lightRadius, lightHeight, lightRadius)) - 
+                      vec3(lightRadius, lightHeight, lightRadius);
   
   // Calculate camera position with rotation
   // Using the same initial position as cube_on_plane_with_shadow.glsl
@@ -259,7 +418,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   vec3 rd = normalize(forward + ndc.x * right + ndc.y * up);
   
   // Render the scene for this ray
-  vec3 col = render(ro, rd);
+  vec3 col = render(ro, rd, lightPosition);
   
   // Output color
   fragColor = vec4(col, 1.0);

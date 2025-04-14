@@ -84,7 +84,11 @@ vec3 rayMarchFloor(vec3 ro, vec3 rd) {
 }
 
 // --- Rendering Function ---
-// Calculates the color for a ray based on intersection
+// Calculates the color for a given ray.
+// Finds the intersection point with the infinite floor plane.
+// If the floor is hit, it calculates an antialiased checkerboard pattern
+// using sine waves, fwidth(), and smoothstep() to determine the color.
+// Returns the background color if the ray doesn't hit the floor.
 // ro: ray origin (camera position)
 // rd: ray direction
 vec3 render(vec3 ro, vec3 rd) {
@@ -96,13 +100,26 @@ vec3 render(vec3 ro, vec3 rd) {
   
   // If we hit the floor (didn't reach MAX_DIST)
   if (p.x < MAX_DIST) {
-    // Checkerboard pattern
-    // Create high contrast black and white squares
-    if (mod(floor(p.x) + floor(p.z), 2.0) < 1.0) {
-      col = COLOR_DARK; // Dark squares
-    } else {
-      col = COLOR_LIGHT; // Light squares
-    }
+    // Checkerboard pattern with antialiasing using sine waves and fwidth
+    // Calculate a value 's' that alternates sign for checkerboard squares
+    // Using PI scales the pattern so squares have side length 1.0
+    float s = sin(PI * p.x) * sin(PI * p.z);
+    
+    // Get the width of s across a pixel to determine smoothing amount
+    float fw = fwidth(s);
+    
+    // Smoothly mix between colors based on 's' and its derivative (fw).
+    // The expression 's / fw' uses the screen-space gradient of 's' to determine
+    // the position within the transition zone between checker squares.
+    // smoothstep(1.0, -1.0, x) maps the input range [-1, 1] (derived from s/fw)
+    // to the output range [1, 0], achieving antialiased blending.
+    float checker = smoothstep(1.0, -1.0, s / fw);
+    // Alternative using smoothstep(-1.0, 1.0, ...) directly:
+    // float checker = smoothstep(-fw, fw, s); // Simpler, often equivalent
+    // float checker = smoothstep(-1.0, 1.0, s / (fw + EPSILON)); // Direct mapping
+
+    // Mix between dark and light colors
+    col = mix(COLOR_DARK, COLOR_LIGHT, checker);
   }
   
   return col;

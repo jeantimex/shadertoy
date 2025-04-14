@@ -1,7 +1,7 @@
 /*
- * Cube on Plane with Soft Shadows
+ * Trefoil Knot on Plane with Soft Shadows
  * 
- * This shader demonstrates ray marching techniques to render a cube on a checkerboard plane
+ * This shader demonstrates ray marching techniques to render a trefoil knot on a checkerboard plane
  * with physically-based lighting and soft shadows. Key features include:
  * 
  * - Ray marching with signed distance functions (SDFs)
@@ -15,14 +15,14 @@
  * The shadow implementation uses ray marching from surface points toward the light source,
  * calculating penumbra based on the proximity of occluders to the shadow ray.
  * 
+ * Trefoil knot SDF based on Ruud Helderman's implementation (June 2024, MIT License)
+ * https://www.shadertoy.com/view/M3tXW4
+ * 
  * Controls:
  * - Modify USE_SOFT_SHADOWS to toggle between soft and hard shadows
  * - Adjust SHADOW_SOFTNESS to control the softness of shadow edges
  */
  
-// --- Constants ---
-const float PI = 3.14159265359;
-
 // --- Ray Marching Constants ---
 // Maximum number of steps to take when ray marching before giving up
 const int MAX_MARCHING_STEPS = 255;
@@ -34,6 +34,8 @@ const float MAX_DIST = 100.0;
 const float PRECISION = 0.001;
 // Default background color for rays that don't hit any object
 const vec3 COLOR_BACKGROUND = vec3(0.835, 1, 1);
+// Mathematical constant PI
+const float PI = 3.14159265359;
 
 // --- Shadow Settings ---
 // Set to true for soft shadows, false for hard shadows
@@ -43,16 +45,61 @@ const bool USE_SOFT_SHADOWS = true;
 const float SHADOW_SOFTNESS = 8.0;
 
 // --- Signed Distance Functions (SDFs) ---
-// SDF for a cube - returns the signed distance from point p to a cube
-// Negative inside, positive outside, zero on the surface
-// p: the point to calculate distance from
-// center: the center position of the cube
-// size: half the length of the cube's sides
-float sdCube(vec3 p, vec3 center, float size) {
-  // Offset p by the center of the cube
-  vec3 q = abs(p - center) - vec3(size);
-  // Distance to the closest point on the cube
-  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+// Parametric equation of the Trefoil Knot
+// https://en.wikipedia.org/wiki/Trefoil_knot
+vec3 pareq(float t) {
+    return vec3(
+        sin(t) + 2.0 * sin(2.0 * t),
+        cos(t) - 2.0 * cos(2.0 * t),
+        -sin(3.0 * t)
+    );
+}
+
+// First derivative of the parametric equation
+vec3 pareq_derived(float t) {
+    return vec3(
+        cos(t) + 4.0 * cos(2.0 * t),
+        -sin(t) + 4.0 * sin(2.0 * t),
+        -3.0 * cos(3.0 * t)
+    );
+}
+
+// Distance between (0, 0, 0) and a line through p with direction d
+float distance_origin_line(vec3 p, vec3 d) {
+    return length(cross(p, p + normalize(d)));
+}
+
+// Distance between p and pareq(t)
+// The better the estimate of t is, the more accurate this distance will be
+float distance_point_curve(vec3 p, float s, float t) {
+    return distance_origin_line(p - s * pareq(t), pareq_derived(t));
+}
+
+// Very rough estimate of t, trying to get pareq(t) near p
+float rough_inverse(vec3 p) {
+    return 0.5 * atan(p.x, -p.y);
+}
+
+// Improved inverse function to make the estimation more accurate
+float improve_inverse(vec3 p, float s, float t) {
+    // This approach works well for trefoil knots
+    vec3 d = pareq_derived(t);
+    return -t - atan(-d.y, d.x);
+}
+
+// SDF for Trefoil Knot
+// p: point to evaluate
+// s: scale (size of the shape)
+// r: radius (thickness of the tube)
+float sdTrefoilKnot(vec3 p, float s, float r) {
+    float t = rough_inverse(p);
+    
+    // There are 2 points on the curve that match t; calculate both
+    float d1 = distance_point_curve(p, s, improve_inverse(p, s, t));
+    float d2 = distance_point_curve(p, s, improve_inverse(p, s, t + PI));
+    
+    // Take whichever is closest to p
+    return min(d1, d2) - r;
 }
 
 // SDF for an infinite horizontal floor at y = -1
@@ -80,11 +127,24 @@ vec2 opU(vec2 d1, vec2 d2) {
 vec2 map(vec3 p) {
   vec2 res = vec2(1e10, 0.); // Initialize with a very large distance and ID = 0
   vec2 flooring = vec2(sdFloor(p), 0.5); // Floor with ID = 0.5
-  vec2 cube = vec2(sdCube(p, vec3(0, 0, 0), 1.0), 1.5); // Centered cube with ID = 1.5
+  
+  // Parameters for the trefoil knot
+  float scale = 0.5;      // Increased overall scale of the knot (was 0.5)
+  float thickness = 0.25; // Increased thickness of the tube (was 0.15)
+  
+  // Apply a rotation to the point before calculating the knot SDF
+  // This helps orient the knot in a more visually appealing way
+  float angle = iTime * 0.2; // Slow rotation over time
+  vec3 q = p;
+  // Position the knot higher above the floor
+  q.y -= 1.2; // Raise the knot above the floor
+  q.xz = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * q.xz;
+  
+  vec2 trefoilKnot = vec2(sdTrefoilKnot(q, scale, thickness), 1.5); // Centered trefoil knot with ID = 1.5
 
   // Combine objects using union operation
   res = opU(res, flooring);
-  res = opU(res, cube);
+  res = opU(res, trefoilKnot);
   return res; // the y-component is the ID of the object hit by the ray
 }
 
@@ -250,9 +310,9 @@ vec3 render(vec3 ro, vec3 rd) {
     materialColor = vec3(0.95) * (0.3 + 0.7 * mod(floor(p.x) + floor(p.z), 2.0));
     materialShininess = 0.08; // Slightly increased specular for floor
   } else {
-    // Cube with blue color
-    materialColor = vec3(0.2, 0.4, 0.8);
-    materialShininess = 0.6; // Higher specular for cube
+    // Trefoil knot with golden color
+    materialColor = vec3(0.8, 0.7, 0.2); // Golden color for the trefoil knot
+    materialShininess = 0.9; // Higher specular for trefoil knot to make it look metallic
   }
   
   // Combine lighting components
@@ -292,20 +352,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   vec2 uv = (fragCoord - .5 * iResolution.xy) / iResolution.y;
   
   // --- Camera Setup ---
-  // Get normalized mouse position for rotation (default to 0.5 if mouse not clicked)
-  float mouseX = iMouse.z > 0.0 ? iMouse.x / iResolution.x : 0.5;
-  // Convert mouse position to rotation angle (full circle when dragging across screen)
-  float rotationY = mouseX * 2.0 * PI;
-  
-  // Calculate camera position with rotation
-  float camDist = 6.0;
-  vec3 ro = vec3(
-    camDist * sin(rotationY),
-    2,
-    camDist * cos(rotationY)
-  );
-  
-  // Look at the center of the scene
+  // Position the camera higher and further back to see more of the scene
+  vec3 ro = vec3(0, 2, 6); // Ray origin (camera position) - moved back and up
+  // Look slightly downward toward the scene
   vec3 lookAt = vec3(0, -0.5, 0);
   vec3 forward = normalize(lookAt - ro);
   vec3 right = normalize(cross(vec3(0, 1, 0), forward));

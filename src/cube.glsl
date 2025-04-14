@@ -1,8 +1,8 @@
 /*
- * Simple Checkerboard Shader with Camera Rotation
+ * Cube on Checkerboard Shader with Camera Rotation
  * 
- * This shader renders a basic infinite checkerboard pattern using ray marching.
- * It demonstrates a minimal implementation without lighting or shadows.
+ * This shader renders a cube on a checkerboard pattern using ray marching.
+ * It demonstrates a minimal implementation without complex lighting or shadows.
  * 
  * Controls:
  * - Click and drag horizontally to rotate the camera around the scene
@@ -29,7 +29,7 @@ const float PRADIUS = 0.01; // Small radius for special pixels
 
 // --- Ray Marching Constants ---
 // Maximum number of steps to take when ray marching before giving up
-const int MAX_MARCHING_STEPS = 100; // Reduced from 255 since we only have a plane
+const int MAX_MARCHING_STEPS = 100;
 // Minimum distance to start ray marching from
 const float MIN_DIST = 0.0;
 // Maximum distance to consider when ray marching (beyond this is considered a miss)
@@ -38,9 +38,10 @@ const float MAX_DIST = 100.0;
 const float PRECISION = 0.001;
 // Default background color for rays that don't hit any object
 const vec3 COLOR_BACKGROUND = vec3(0.835, 1, 1);
-// Checkerboard colors
+// Object colors
 const vec3 COLOR_DARK = vec3(0.1);
 const vec3 COLOR_LIGHT = vec3(0.9);
+const vec3 COLOR_CUBE = vec3(0.2, 0.4, 0.8); // Blue cube
 
 // --- Signed Distance Functions (SDFs) ---
 // SDF for an infinite horizontal floor at y = -1
@@ -49,38 +50,89 @@ float sdFloor(vec3 p) {
   return p.y + 1.0; // +1 shifts the floor down to y = -1
 }
 
+// SDF for a cube - returns the signed distance from point p to a cube
+// Negative inside, positive outside, zero on the surface
+// p: the point to calculate distance from
+// center: the center position of the cube
+// size: half the length of the cube's sides
+float sdCube(vec3 p, vec3 center, float size) {
+  // Offset p by the center of the cube
+  vec3 q = abs(p - center) - vec3(size);
+  // Distance to the closest point on the cube
+  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+// --- Scene Composition Operations ---
+// Union operation for combining two objects
+// Takes two distances and returns the smallest one
+float opUnion(float d1, float d2) {
+  return min(d1, d2);
+}
+
 // --- Scene Description ---
 // Maps a 3D point to the closest object in the scene
-// Returns the signed distance to the closest object
-float map(vec3 p) {
-  return sdFloor(p);
+// Returns a vec2 where:
+//   x component = signed distance to closest object
+//   y component = material ID (0 = floor, 1 = cube)
+vec2 map(vec3 p) {
+  // Floor with ID = 0
+  float floorDist = sdFloor(p);
+  vec2 floor = vec2(floorDist, 0.0);
+  
+  // Cube with ID = 1
+  float cubeDist = sdCube(p, vec3(0.0, 0.0, 0.0), 1.0);
+  vec2 cube = vec2(cubeDist, 1.0);
+  
+  // Return the closest object
+  return (floor.x < cube.x) ? floor : cube;
 }
 
 // --- Ray Marching Implementation ---
-// Simplified ray marching that only looks for floor intersection
+// Marches a ray through the scene to find intersections
 // ro: ray origin (camera position)
 // rd: ray direction
-// Returns the intersection point
-vec3 rayMarchFloor(vec3 ro, vec3 rd) {
-  // For a ray hitting a horizontal plane at y = -1, we can solve directly:
-  // ro.y + t * rd.y = -1
-  // t = (-1 - ro.y) / rd.y
+// Returns a vec3 where:
+//   x component = distance traveled along ray until hit
+//   y component = material ID of hit object
+//   z component = 0 (unused)
+vec3 rayMarch(vec3 ro, vec3 rd) {
+  float depth = MIN_DIST;
+  float materialID = -1.0;
   
-  // Check if ray is parallel to the floor or pointing up
-  if (rd.y >= 0.0) {
-    return vec3(MAX_DIST); // No intersection
+  // Main ray marching loop
+  for(int i = 0; i < MAX_MARCHING_STEPS; i++) {
+    vec3 p = ro + depth * rd;
+    vec2 result = map(p);
+    float dist = result.x;
+    
+    // If we're very close to the surface, consider it a hit
+    if(dist < PRECISION) {
+      materialID = result.y;
+      break;
+    }
+    
+    // Move along the ray by the safe distance
+    depth += dist;
+    
+    // If we've gone too far, consider it a miss
+    if(depth > MAX_DIST) {
+      break;
+    }
   }
   
-  // Calculate intersection distance
-  float t = (-1.0 - ro.y) / rd.y;
-  
-  // Check if intersection is too close or too far
-  if (t < MIN_DIST || t > MAX_DIST) {
-    return vec3(MAX_DIST); // Out of range
-  }
-  
-  // Return the intersection point
-  return ro + rd * t;
+  return vec3(depth, materialID, 0.0);
+}
+
+// Calculate surface normal at point p
+vec3 calcNormal(vec3 p) {
+  const float h = 0.0001; // Small step for numerical differentiation
+  vec2 k = vec2(1.0, -1.0);
+  return normalize(
+    k.xyy * map(p + k.xyy * h).x +
+    k.yxy * map(p + k.yxy * h).x +
+    k.yyx * map(p + k.yyx * h).x +
+    k.xxx * map(p + k.xxx * h).x
+  );
 }
 
 // --- Rendering Function ---
@@ -91,17 +143,34 @@ vec3 render(vec3 ro, vec3 rd) {
   // Default to background color
   vec3 col = COLOR_BACKGROUND;
   
-  // Get intersection point with floor
-  vec3 p = rayMarchFloor(ro, rd);
+  // Perform ray marching to find intersection
+  vec3 result = rayMarch(ro, rd);
+  float depth = result.x;
+  float materialID = result.y;
   
-  // If we hit the floor (didn't reach MAX_DIST)
-  if (p.x < MAX_DIST) {
-    // Checkerboard pattern
-    // Create high contrast black and white squares
-    if (mod(floor(p.x) + floor(p.z), 2.0) < 1.0) {
-      col = COLOR_DARK; // Dark squares
+  // If we hit something (didn't reach MAX_DIST)
+  if(depth < MAX_DIST) {
+    // Calculate the 3D point of intersection
+    vec3 p = ro + rd * depth;
+    
+    // Calculate surface normal at intersection point
+    vec3 normal = calcNormal(p);
+    
+    // Simple lighting
+    vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+    float diffuse = max(dot(normal, lightDir), 0.2); // Add some ambient
+    
+    // Determine color based on material ID
+    if(materialID < 0.5) {
+      // Floor with checkerboard pattern
+      if(mod(floor(p.x) + floor(p.z), 2.0) < 1.0) {
+        col = COLOR_DARK * diffuse;
+      } else {
+        col = COLOR_LIGHT * diffuse;
+      }
     } else {
-      col = COLOR_LIGHT; // Light squares
+      // Cube
+      col = COLOR_CUBE * diffuse;
     }
   }
   

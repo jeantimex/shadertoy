@@ -20,9 +20,6 @@
  * - Adjust SHADOW_SOFTNESS to control the softness of shadow edges
  */
  
-// --- Constants ---
-const float PI = 3.14159265359;
-
 // --- Ray Marching Constants ---
 // Maximum number of steps to take when ray marching before giving up
 const int MAX_MARCHING_STEPS = 255;
@@ -292,20 +289,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   vec2 uv = (fragCoord - .5 * iResolution.xy) / iResolution.y;
   
   // --- Camera Setup ---
-  // Get normalized mouse position for rotation (default to 0.5 if mouse not clicked)
-  float mouseX = iMouse.z > 0.0 ? iMouse.x / iResolution.x : 0.5;
-  // Convert mouse position to rotation angle (full circle when dragging across screen)
-  float rotationY = mouseX * 2.0 * PI;
-  
-  // Calculate camera position with rotation
-  float camDist = 6.0;
-  vec3 ro = vec3(
-    camDist * sin(rotationY),
-    2,
-    camDist * cos(rotationY)
-  );
-  
-  // Look at the center of the scene
+  // Position the camera higher and further back to see more of the scene
+  vec3 ro = vec3(0, 2, 6); // Ray origin (camera position) - moved back and up
+  // Look slightly downward toward the scene
   vec3 lookAt = vec3(0, -0.5, 0);
   vec3 forward = normalize(lookAt - ro);
   vec3 right = normalize(cross(vec3(0, 1, 0), forward));

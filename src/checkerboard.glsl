@@ -1,8 +1,11 @@
 /*
- * Simple Checkerboard Shader
+ * Simple Checkerboard Shader with Camera Rotation
  * 
  * This shader renders a basic infinite checkerboard pattern using ray marching.
  * It demonstrates a minimal implementation without complex lighting or shadows.
+ * 
+ * Controls:
+ * - Click and drag horizontally to rotate the camera around the scene
  */
  
 // --- Ray Marching Constants ---
@@ -111,10 +114,31 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   // Centered at origin and adjusted for aspect ratio
   vec2 uv = (fragCoord - .5 * iResolution.xy) / iResolution.y;
   
-  // --- Camera Setup ---
-  // Position the camera higher and further back to see more of the scene
-  vec3 ro = vec3(0, 2, 6); // Ray origin (camera position)
-  // Look slightly downward toward the scene
+  // --- Camera Setup with Mouse Rotation ---
+  // Default rotation angle (static view when not dragging)
+  float rotationAngle = 0.0;
+  
+  // Mouse interaction logic
+  if (iMouse.z > 0.0) { // Mouse button is pressed
+    // Get the initial click position (stored in iMouse.zw)
+    vec2 clickPos = vec2(iMouse.z, iMouse.w);
+    
+    // Calculate drag distance from initial click position
+    float dragX = (iMouse.x - clickPos.x) / 100.0; // Scale for sensitivity
+    
+    // Apply rotation based on drag distance
+    rotationAngle = dragX;
+  }
+  
+  // Calculate camera position with rotation
+  float cameraDistance = 6.0;
+  vec3 ro = vec3(
+    cameraDistance * sin(rotationAngle),
+    2.0, // Height
+    cameraDistance * cos(rotationAngle)
+  );
+  
+  // Look at the center of the scene
   vec3 lookAt = vec3(0, -0.5, 0);
   vec3 forward = normalize(lookAt - ro);
   vec3 right = normalize(cross(vec3(0, 1, 0), forward));

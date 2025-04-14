@@ -6,8 +6,27 @@
  * 
  * Controls:
  * - Click and drag horizontally to rotate the camera around the scene
+ * 
+ * Setup Instructions:
+ * 1. In ShaderToy, create a new shader
+ * 2. Add a Buffer A (click + button next to Buffers)
+ * 3. Set Buffer A's resolution to match the main resolution
+ * 4. Paste the Common code in both tabs (only constants and functions)
+ * 5. Paste the Buffer A code in the Buffer A tab
+ * 6. Paste the Image code in the Image tab
+ * 7. In the Image tab, set iChannel0 to Buffer A
+ * 
+ * Note: ShaderToy uniforms like iResolution are only available in the shader tabs,
+ * not in the Common tab. That's why we keep mouse_dragging in the Buffer A tab.
  */
- 
+
+// -------------------------------------------------------
+// Common Tab - Paste this in both Buffer A and Image tabs
+// -------------------------------------------------------
+const float PI = 3.14159265359;
+const float EPSILON = 1.0e-3;
+const float PRADIUS = 0.01; // Small radius for special pixels
+
 // --- Ray Marching Constants ---
 // Maximum number of steps to take when ray marching before giving up
 const int MAX_MARCHING_STEPS = 255;
@@ -107,28 +126,69 @@ vec3 render(vec3 ro, vec3 rd) {
   return col;
 }
 
-// --- Main Entry Point ---
-// ShaderToy entry point - called for each pixel
+// -------------------------------------------------------
+// Buffer A Tab - Paste this in Buffer A tab only
+// -------------------------------------------------------
+// Mouse dragging detection - returns true if mouse is being dragged
+// Also outputs the displacement since last frame
+bool mouse_dragging(out vec2 disp) {
+  vec2 du = vec2(1.0, 1.0) / iResolution.xy;
+  vec4 p_mouse = 2.0 * texture(iChannel0, du) - 1.0;
+  vec4 mouse = iMouse / iResolution.xyxy;
+  disp = mouse.xy - p_mouse.xy;
+  return p_mouse.z > 0.0 && mouse.z > 0.0;
+}
+
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / iResolution.xy;
+  
+  // Special pixel to store mouse state
+  if (length(uv) < PRADIUS) {
+    // Store normalized mouse position (0 to 1 range)
+    fragColor = (iMouse / iResolution.xyxy + 1.0) / 2.0;
+    return;
+  }
+  
+  // First Frame
+  if (iFrame == 0) {
+    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+  
+  // Special pixel to store rotation angle
+  if (length(uv - vec2(1.0, 1.0)) < PRADIUS) {
+    // Get previous rotation
+    vec2 du = vec2(1.0, 1.0) / iResolution.xy;
+    vec4 rot = 2.0 * texture(iChannel0, vec2(1.0, 1.0) - du) - 1.0;
+    
+    // Check for mouse dragging
+    vec2 dm;
+    bool drag = mouse_dragging(dm);
+    
+    // Update rotation based on drag
+    if (drag && length(dm) > EPSILON) {
+      // Use horizontal movement for rotation around y-axis
+      rot.x += dm.x * 3.0;
+      
+      // Keep rotation within bounds
+      if (rot.x > PI) rot.x -= 2.0 * PI;
+      if (rot.x < -PI) rot.x += 2.0 * PI;
+    }
+    
+    // Store rotation for next frame
+    fragColor = (rot + 1.0) / 2.0;
+    return;
+  }
+  
+  // For all other pixels, render the scene normally
   // Convert pixel coordinates to normalized device coordinates (-1 to 1)
   // Centered at origin and adjusted for aspect ratio
-  vec2 uv = (fragCoord - .5 * iResolution.xy) / iResolution.y;
+  vec2 ndc = (fragCoord - 0.5 * iResolution.xy) / iResolution.y;
   
-  // --- Camera Setup with Mouse Rotation ---
-  // Default rotation angle (static view when not dragging)
-  float rotationAngle = 0.0;
-  
-  // Mouse interaction logic
-  if (iMouse.z > 0.0) { // Mouse button is pressed
-    // Get the initial click position (stored in iMouse.zw)
-    vec2 clickPos = vec2(iMouse.z, iMouse.w);
-    
-    // Calculate drag distance from initial click position
-    float dragX = (iMouse.x - clickPos.x) / 100.0; // Scale for sensitivity
-    
-    // Apply rotation based on drag distance
-    rotationAngle = dragX;
-  }
+  // Get rotation angle from special pixel
+  vec2 du = vec2(1.0, 1.0) / iResolution.xy;
+  vec4 rot = 2.0 * texture(iChannel0, vec2(1.0, 1.0) - du) - 1.0;
+  float rotationAngle = rot.x;
   
   // Calculate camera position with rotation
   float cameraDistance = 6.0;
@@ -143,11 +203,20 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   vec3 forward = normalize(lookAt - ro);
   vec3 right = normalize(cross(vec3(0, 1, 0), forward));
   vec3 up = cross(forward, right);
-  vec3 rd = normalize(forward + uv.x * right + uv.y * up);
+  vec3 rd = normalize(forward + ndc.x * right + ndc.y * up);
   
   // Render the scene for this ray
   vec3 col = render(ro, rd);
   
-  // Output final color to screen
+  // Output color
   fragColor = vec4(col, 1.0);
+}
+
+// -------------------------------------------------------
+// Image Tab - Paste this in Image tab only
+// -------------------------------------------------------
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  // Simply display the rendered result from Buffer A
+  vec2 uv = fragCoord / iResolution.xy;
+  fragColor = texture(iChannel0, uv);
 }
